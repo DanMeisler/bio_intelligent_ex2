@@ -57,10 +57,10 @@ class DataSet:
 
             data = np.array(data, dtype=np.float32)
             if self._is_test_set:
-                return data.reshape([self._batch_size] + self._image_shape)
+                return data.reshape([-1] + self._image_shape)
 
             classification = data[:, 0].astype("uint8")
-            return np.delete(data, [0], axis=1).reshape([self._batch_size] + self._image_shape), classification
+            return np.delete(data, [0], axis=1).reshape([-1] + self._image_shape), classification
 
     def _construct_lines(self):
         self._lines_offsets = []
@@ -265,11 +265,19 @@ class Conv2D(Layer):
         for h in range(0, x_out):
             for v in range(0, y_out):
                 gradient_inputs[:, :, h:h + self._filter_size, v:v + self._filter_size] += \
-                    np.sum(self._filters * grad_output[:, :, None, h, v], axis=1)
+                    np.sum(self._filters * grad_output[:, :, None, h:h+1, v:v+1], axis=1)
                 gradient_filters += np.sum(
                     (inputs[:, None, :, h:h + self._filter_size, v:v + self._filter_size] *
-                     grad_output[:, :, None, h, v]), axis=0)
+                     grad_output[:, :, None, h:h+1, v:v+1]), axis=0)
         return gradient_inputs
+
+
+class Flatten(Layer):
+    def forward(self, inputs):
+        return np.reshape(inputs, (inputs.shape[0], -1))
+
+    def backward(self, inputs, grad_output):
+        return grad_output.reshape(inputs.shape)
 
 
 def grad_softmax_cross_entropy(inputs, correct_ids):
@@ -374,8 +382,9 @@ def main():
     validation_set = DataSet("data/validate.csv", batch_size=64)
 
     layers = list()
-    layers.append(Conv2D(3, 10, 4))
-    layers.append(Dense(3072, 512))
+    layers.append(Conv2D(3, 4, 5))
+    layers.append(Flatten())
+    layers.append(Dense(3136, 512))
     layers.append(BatchNorm(512))
     layers.append(LReLU())
     layers.append(Dropout(0.5))
