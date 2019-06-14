@@ -269,6 +269,8 @@ class Conv2D(Layer):
                 gradient_filters += np.sum(
                     (inputs[:, None, :, h:h + self._filter_size, v:v + self._filter_size] *
                      grad_output[:, :, None, h:h+1, v:v+1]), axis=0)
+
+        self._filters -= self.learning_rate * gradient_filters
         return gradient_inputs
 
 
@@ -382,11 +384,14 @@ def main():
     validation_set = DataSet("data/validate.csv", batch_size=64)
 
     layers = list()
-    layers.append(Conv2D(3, 4, 5))
-    layers.append(BatchNorm([4, 28, 28]))
+    layers.append(Conv2D(3, 5, 12))
+    layers.append(BatchNorm([5, 21, 21]))
+    layers.append(LReLU())
+    layers.append(Conv2D(5, 5, 12))
+    layers.append(BatchNorm([5, 10, 10]))
     layers.append(LReLU())
     layers.append(Flatten())
-    layers.append(Dense(3136, 64))
+    layers.append(Dense(500, 64))
     layers.append(BatchNorm(64))
     layers.append(LReLU())
     layers.append(Dropout(0.5))
