@@ -17,7 +17,9 @@ def plot_accuracy(train_accuracy_per_epoch, validation_accuracy_per_epoch, epoch
 
 
 class DataSet:
-    def __init__(self, file_path, is_test_set=False, batch_size=1, image_shape=[3, 32, 32]):
+    def __init__(self, file_path, is_test_set=False, batch_size=1, image_shape=None):
+        if image_shape is None:
+            image_shape = [3, 32, 32]
         self._file_path = file_path
         self._is_test_set = is_test_set
         self._batch_size = batch_size
