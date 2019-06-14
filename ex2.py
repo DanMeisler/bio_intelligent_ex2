@@ -17,16 +17,16 @@ def plot_accuracy(train_accuracy_per_epoch, validation_accuracy_per_epoch, epoch
 
 
 class DataSet:
-    def __init__(self, file_path, is_test_set=False, batch_size=1, image_shape=None):
-        if image_shape is None:
-            image_shape = [3, 32, 32]
+    def __init__(self, file_path, is_test_set=False, batch_size=1, input_shape=None):
+        if input_shape is None:
+            input_shape = [3, 32, 32]
         self._file_path = file_path
         self._is_test_set = is_test_set
         self._batch_size = batch_size
         self._lines_offsets = None
         self._lines_order = None
         self._current_line = None
-        self._image_shape = image_shape
+        self._input_shape = input_shape
         self._construct_lines()
 
     def shuffle(self):
@@ -57,10 +57,10 @@ class DataSet:
 
             data = np.array(data, dtype=np.float32)
             if self._is_test_set:
-                return data.reshape([-1] + self._image_shape)
+                return data.reshape([-1] + self._input_shape)
 
             classification = data[:, 0].astype("uint8")
-            return np.delete(data, [0], axis=1).reshape([-1] + self._image_shape), classification
+            return np.delete(data, [0], axis=1).reshape([-1] + self._input_shape), classification
 
     def _construct_lines(self):
         self._lines_offsets = []
@@ -182,10 +182,10 @@ class Dropout(Layer):
 
 
 class BatchNorm(Layer):
-    def __init__(self, input_size):
+    def __init__(self, input_shape):
         super().__init__()
-        self._gamma = np.ones((1, input_size))
-        self._beta = np.zeros((1, input_size))
+        self._gamma = np.ones(input_shape)
+        self._beta = np.zeros(input_shape)
         self._var = None
         self._mu = None
         self._test_var = None
@@ -383,12 +383,10 @@ def main():
 
     layers = list()
     layers.append(Conv2D(3, 4, 5))
-    layers.append(Flatten())
-    layers.append(Dense(3136, 512))
-    layers.append(BatchNorm(512))
+    layers.append(BatchNorm([4, 28, 28]))
     layers.append(LReLU())
-    layers.append(Dropout(0.5))
-    layers.append(Dense(512, 64))
+    layers.append(Flatten())
+    layers.append(Dense(3136, 64))
     layers.append(BatchNorm(64))
     layers.append(LReLU())
     layers.append(Dropout(0.5))
