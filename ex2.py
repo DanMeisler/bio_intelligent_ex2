@@ -17,13 +17,14 @@ def plot_accuracy(train_accuracy_per_epoch, validation_accuracy_per_epoch, epoch
 
 
 class DataSet:
-    def __init__(self, file_path, is_test_set=False, batch_size=1):
+    def __init__(self, file_path, is_test_set=False, batch_size=1, image_shape=[3, 32, 32]):
         self._file_path = file_path
         self._is_test_set = is_test_set
         self._batch_size = batch_size
         self._lines_offsets = None
         self._lines_order = None
         self._current_line = None
+        self._image_shape = image_shape
         self._construct_lines()
 
     def shuffle(self):
@@ -54,10 +55,10 @@ class DataSet:
 
             data = np.array(data, dtype=np.float32)
             if self._is_test_set:
-                return data
+                return data.reshape([self._batch_size] + self._image_shape)
 
             classification = data[:, 0].astype("uint8")
-            return np.delete(data, [0], axis=1), classification
+            return np.delete(data, [0], axis=1).reshape([self._batch_size] + self._image_shape), classification
 
     def _construct_lines(self):
         self._lines_offsets = []
@@ -240,8 +241,8 @@ class Conv2D(Layer):
             "incorrect channel count passed to forward (%d != %d)" % (channels_in, self._channels_in)
 
         assert x == y, "Only squared inputs are supported (x=%d != y=%d)" % (x, y)
-        assert x <= self._filter_size, \
-            "Inputs size is too big for the filter size (x=%d > f=%d)" % (x, self._filter_size)
+        assert x >= self._filter_size, \
+            "Inputs size is too small for the filter size (x=%d < f=%d)" % (x, self._filter_size)
 
         x_out = y_out = x - self._filter_size + 1
 
@@ -249,7 +250,7 @@ class Conv2D(Layer):
         for h in range(0, x_out):
             for v in range(0, y_out):
                 inputs_slice = inputs[:, None, :, h: h + self._filter_size, v:v + self._filter_size]
-                output[:, :, h, v] = np.sum(inputs_slice * self._filters, axis=[2, 3, 4])
+                output[:, :, h, v] = np.sum(inputs_slice * self._filters, axis=(2, 3, 4))
 
         return output
 
@@ -258,7 +259,7 @@ class Conv2D(Layer):
 
         gradient_inputs = np.zeros_like(inputs)
         gradient_filters = np.zeros_like(self._filters)
-        
+
         for h in range(0, x_out):
             for v in range(0, y_out):
                 gradient_inputs[:, :, h:h + self._filter_size, v:v + self._filter_size] += \
@@ -371,6 +372,7 @@ def main():
     validation_set = DataSet("data/validate.csv", batch_size=64)
 
     layers = list()
+    layers.append(Conv2D(3, 10, 4))
     layers.append(Dense(3072, 512))
     layers.append(BatchNorm(512))
     layers.append(LReLU())
