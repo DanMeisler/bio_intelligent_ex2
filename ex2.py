@@ -17,7 +17,7 @@ def plot_accuracy(train_accuracy_per_epoch, validation_accuracy_per_epoch, epoch
 
 
 class DataSet:
-    def __init__(self, file_path, is_test_set=False, batch_size=1, input_shape=None):
+    def __init__(self, file_path, is_test_set=False, batch_size=1, input_shape=None, line_count=None):
         if input_shape is None:
             input_shape = [3, 32, 32]
         self._file_path = file_path
@@ -27,7 +27,7 @@ class DataSet:
         self._lines_order = None
         self._current_line = None
         self._input_shape = input_shape
-        self._construct_lines()
+        self._construct_lines(line_count)
 
     def shuffle(self):
         random.shuffle(self._lines_order)
@@ -62,7 +62,7 @@ class DataSet:
             classification = data[:, 0].astype("uint8")
             return np.delete(data, [0], axis=1).reshape([-1] + self._input_shape), classification
 
-    def _construct_lines(self):
+    def _construct_lines(self, line_count=None):
         self._lines_offsets = []
         self._lines_order = []
         self._current_line = 0
@@ -71,6 +71,9 @@ class DataSet:
             offset = 0
 
             for index, line in enumerate(f):
+                if line_count and index >= line_count:
+                    return
+
                 self._lines_order.append(index)
                 self._lines_offsets.append(offset)
                 offset += len(line)
@@ -181,6 +184,61 @@ class Dropout(Layer):
         return self._dropout * grad_output * 1 / (1 - self._dropout_rate)
 
 
+class MaxPool(Layer):
+    def __init__(self, input_shape, pool_size=2, stride=2):
+        super().__init__()
+        self._pool_size = pool_size
+        self._stride = stride
+        self._n_h = int((input_shape[1] - self._pool_size) / self._stride + 1)
+        self._n_w = int((input_shape[2] - self._pool_size) / self._stride + 1)
+        self._n_c = input_shape[0]
+        self._masks = {}
+
+    def forward(self, inputs):
+        batch_size = inputs.shape[0]
+        output = np.zeros((batch_size, self._n_c, self._n_h, self._n_w))
+        for i in range(self._n_h):
+            v_start = i * self._stride
+            v_end = v_start + self._pool_size
+
+            for j in range(self._n_w):
+                h_start = j * self._stride
+                h_end = h_start + self._pool_size
+                inputs_slice = inputs[:, :, v_start:v_end, h_start:h_end]
+
+                if self.is_training:
+                    self._cache_max_mask(inputs_slice, (i, j))
+
+                output[:, :, i, j] = np.max(inputs_slice, axis=(2, 3))
+
+        return output
+
+    def backward(self, inputs, grad_output):
+        grad_input = np.zeros_like(inputs)
+
+        # 'Pool' back
+        for i in range(self._n_h):
+            v_start = i * self._stride
+            v_end = v_start + self._pool_size
+
+            for j in range(self._n_w):
+                h_start = j * self._stride
+                h_end = h_start + self._pool_size
+                grad_input[:, :, v_start:v_end, h_start:h_end] += \
+                    grad_output[:, :, i:i + 1, j:j + 1] * self._masks[(i, j)]
+        return grad_input
+
+    def _cache_max_mask(self, x, ij):
+        mask = np.zeros_like(x)
+
+        reshaped_x = x.reshape(x.shape[0], x.shape[1] * x.shape[2], x.shape[3])
+        idx = np.argmax(reshaped_x, axis=1)
+
+        ax1, ax2 = np.indices((x.shape[0], x.shape[3]))
+        mask.reshape(mask.shape[0], mask.shape[1] * mask.shape[2], mask.shape[3])[ax1, idx, ax2] = 1
+        self._masks[ij] = mask
+
+
 class BatchNorm(Layer):
     def __init__(self, input_shape):
         super().__init__()
@@ -229,13 +287,14 @@ class BatchNorm(Layer):
 
 
 class Conv2D(Layer):
-    def __init__(self, channels_in, channels_out, filter_size):
+    def __init__(self, channels_in, channels_out, filter_size, stride):
         super().__init__()
         self._channels_in = channels_in
         self._channels_out = channels_out
         self._filter_size = filter_size
         self._filters = np.random.normal(scale=np.sqrt(2 / ((self._filter_size ** 2) * self._channels_in)),
                                          size=(self._channels_out, self._channels_in, filter_size, filter_size))
+        self._stride = stride
 
     def forward(self, inputs):
         batch_size, channels_in, x, y = inputs.shape
@@ -246,12 +305,13 @@ class Conv2D(Layer):
         assert x >= self._filter_size, \
             "Inputs size is too small for the filter size (x=%d < f=%d)" % (x, self._filter_size)
 
-        x_out = y_out = x - self._filter_size + 1
+        x_out = y_out = (x - self._filter_size) // self._stride + 1
 
         output = np.zeros([batch_size, self._channels_out, x_out, y_out])
         for h in range(0, x_out):
             for v in range(0, y_out):
-                inputs_slice = inputs[:, None, :, h: h + self._filter_size, v:v + self._filter_size]
+                inputs_slice = inputs[:, None, :, h * self._stride: h * self._stride + self._filter_size,
+                                      v * self._stride:v * self._stride + self._filter_size]
                 output[:, :, h, v] = np.sum(inputs_slice * self._filters, axis=(2, 3, 4))
 
         return output
@@ -264,10 +324,12 @@ class Conv2D(Layer):
 
         for h in range(0, x_out):
             for v in range(0, y_out):
-                gradient_inputs[:, :, h:h + self._filter_size, v:v + self._filter_size] += \
+                gradient_inputs[:, :,  h * self._stride: h * self._stride + self._filter_size,
+                                v * self._stride:v * self._stride + self._filter_size] += \
                     np.sum(self._filters * grad_output[:, :, None, h:h+1, v:v+1], axis=1)
                 gradient_filters += np.sum(
-                    (inputs[:, None, :, h:h + self._filter_size, v:v + self._filter_size] *
+                    (inputs[:, None, :, h * self._stride:h * self._stride + self._filter_size,
+                            v * self._stride:v * self._stride + self._filter_size] *
                      grad_output[:, :, None, h:h+1, v:v+1]), axis=0)
 
         self._filters -= self.learning_rate * gradient_filters
@@ -380,21 +442,28 @@ class NeuralNetwork(object):
 
 def main():
     test_set = DataSet("data/test.csv", is_test_set=True)
-    train_set = DataSet("data/train.csv", batch_size=64)
+    train_set = DataSet("data/train.csv", batch_size=64, line_count=4000)
     validation_set = DataSet("data/validate.csv", batch_size=64)
 
     layers = list()
-    layers.append(Conv2D(3, 5, 12))
-    layers.append(BatchNorm([5, 21, 21]))
+    layers.append(Conv2D(3, 16, 5, 1))
+    layers.append(BatchNorm([16, 28, 28]))
     layers.append(LReLU())
-    layers.append(Conv2D(5, 5, 12))
-    layers.append(BatchNorm([5, 10, 10]))
+    layers.append(MaxPool([16, 28, 28]))
+
+    layers.append(Conv2D(16, 32, 3, 1))
+    layers.append(BatchNorm([32, 12, 12]))
     layers.append(LReLU())
+    layers.append(MaxPool([32, 12, 12]))
+
     layers.append(Flatten())
-    layers.append(Dense(500, 64))
+
+    layers.append(Dropout(0.3))
+    layers.append(Dense(1152, 64))
     layers.append(BatchNorm(64))
     layers.append(LReLU())
-    layers.append(Dropout(0.5))
+
+    layers.append(Dropout(0.3))
     layers.append(Dense(64, 10))
 
     nn = NeuralNetwork({x: x - 1 for x in range(1, 11)}, layers, train_set, validation_set, 40)
